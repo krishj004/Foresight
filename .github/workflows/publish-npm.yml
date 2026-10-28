@@ -10,7 +10,7 @@ on:
       version:
         description: "子包版本（与主包一致）"
         required: true
-        default: "0.3.0"
+        default: "0.4.0"
   push:
     tags: ["v*"]
 
@@ -54,7 +54,7 @@ jobs:
           EXT=${{ runner.os == 'Windows' && '".exe"' || '""' }}
           mkdir -p pkg/bin
           cp dist/foresight* pkg/bin/foresight${EXT}
-          sed -e "s/0.3.0/${V}/g" \
+          sed -e "s/0.4.0/${V}/g" \
               -e "s/foresight-agent-win32-x64/foresight-agent-${{ matrix.pkg }}/g" \
               -e "s/bin\/foresight\.exe/bin\/foresight${EXT}/g" \
               packaging/npm/foresight-agent-win32-x64/package.json > pkg/package.json

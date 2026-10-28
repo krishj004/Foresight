@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Foresight — AI Event Probability Prediction Engine</title>
+<meta name="description" content="Event in, probability + timeline + sourced report out. A Brier-scored forecasting engine with a RAG pipeline, multi-model ensemble, calibration and a resolution loop.">
+<meta property="og:title" content="Foresight — AI Event Probability Prediction Engine">
+<meta property="og:description" content="Event in, probability + timeline + sourced report out. Brier-scored track record.">
+<style>
+  :root{
+    --bg:#0b0e13; --bg2:#11151c; --fg:#e9eef5; --muted:#9aa6b6; --line:#212a36;
+    --accent:#7ab8ff; --accent2:#5eead4; --card:#121821;
+  }
+  @media (prefers-color-scheme: light){
+    :root{ --bg:#ffffff; --bg2:#f6f8fa; --fg:#101318; --muted:#5b6470; --line:#e3e6ea;
+           --accent:#0b63ce; --accent2:#0a7d51; --card:#f7f8fa; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+       font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+       -webkit-font-smoothing:antialiased}
+  main{max-width:960px;margin:0 auto;padding:64px 24px 80px}
+  .eyebrow{display:inline-block;font-size:.74rem;letter-spacing:.14em;text-transform:uppercase;
+           color:var(--accent2);border:1px solid var(--line);border-radius:999px;
+           padding:4px 11px;margin-bottom:20px;background:var(--card)}
+  h1{font-size:clamp(2rem,5vw,3rem);line-height:1.1;letter-spacing:-.03em;margin:0 0 16px;font-weight:700}
+  .lede{font-size:1.12rem;color:var(--muted);max-width:62ch;margin:0 0 32px}
+  .cta{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:52px}
+  .btn{display:inline-flex;align-items:center;gap:8px;padding:12px 20px;border-radius:9px;
+       font-weight:600;font-size:.95rem;text-decoration:none;border:1px solid var(--line)}
+  .btn.primary{background:var(--accent);border-color:var(--accent);color:#04101f}
+  .btn.secondary{background:var(--card);color:var(--fg)}
+  .btn:hover{filter:brightness(1.08)}
+  h2{font-size:.8rem;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);
+     margin:0 0 14px;font-weight:600}
+  section{margin-bottom:44px}
+  .grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(250px,1fr))}
+  .grid a{display:block;padding:16px 18px;border:1px solid var(--line);border-radius:11px;
+          background:var(--card);color:var(--fg);text-decoration:none;transition:border-color .15s,transform .15s}
+  .grid a:hover{border-color:var(--accent);transform:translateY(-1px)}
+  .grid b{display:block;font-weight:600;margin-bottom:3px}
+  .grid span{color:var(--muted);font-size:.88rem;line-height:1.5}
+  pre{background:var(--card);border:1px solid var(--line);border-radius:11px;padding:16px 18px;
+      overflow-x:auto;font:.9rem/1.6 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;margin:0}
+  pre code{color:var(--fg)}
+  .cmt{color:var(--muted)}
+  ul.points{margin:0;padding-left:1.1rem;color:var(--muted)}
+  ul.points li{margin-bottom:7px}
+  ul.points strong{color:var(--fg);font-weight:600}
+  .note{border-left:3px solid var(--line);padding:2px 0 2px 14px;color:var(--muted);
+        font-size:.9rem;margin:0}
+  footer{border-top:1px solid var(--line);padding-top:20px;color:var(--muted);font-size:.88rem;
+         display:flex;flex-wrap:wrap;gap:8px 20px;align-items:center}
+  footer a{color:var(--accent);text-decoration:none}
+  footer a:hover{text-decoration:underline}
+</style>
+</head>
+<body>
+<main>
+  <span class="eyebrow">Open source · MIT</span>
+  <h1>Foresight</h1>
+  <p class="lede">Event in, probability + timeline + sourced report out. A forecasting engine built on a Halawi-style retrieval pipeline, a multi-model ensemble, an order-preserving calibration layer, and a resolution loop that keeps a Brier-scored track record.</p>
+
+  <div class="cta">
+    <a class="btn primary" href="architecture.html">Open interactive architecture →</a>
+    <a class="btn secondary" href="https://github.com/krishj004/Foresight">View source</a>
+    <a class="btn secondary" href="architecture.zh-CN.html">中文架构图</a>
+  </div>
+
+  <section>
+    <h2>Start</h2>
+    <pre><code><span class="cmt"># one-command engine install (prebuilt binary, no Python needed)</span>
+npm i -g foresight-agent
+
+<span class="cmt"># predict an event</span>
+foresight-engine "Will the Fed cut rates in September?" --closes 2026-09-17
+
+<span class="cmt"># or run from source</span>
+git clone https://github.com/krishj004/Foresight.git
+cd Foresight &amp;&amp; uv sync &amp;&amp; uv run pytest</code></pre>
+  </section>
+
+  <section>
+    <h2>How it works</h2>
+    <ul class="points">
+      <li><strong>Pipeline</strong> — Halawi five-step: search-term generation → retrieval → relevance filtering → summarization → base-rate + prediction.</li>
+      <li><strong>Ensemble</strong> — 5–12 models, median aggregation, then order-preserving calibration.</li>
+      <li><strong>Resolution loop</strong> — dual-source market comparison, LLM resolver with evidence and a confidence guardrail, manual fallback; Brier scores and calibration curves update as questions resolve.</li>
+      <li><strong>Sourcing</strong> — Polymarket Gamma pipeline plus an autonomous topic-selection engine over 20 RSS sources.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>More</h2>
+    <div class="grid">
+      <a href="https://github.com/krishj004/Foresight/blob/main/README.md">
+        <b>README →</b><span>Full quick start, directory layout, and configuration</span>
+      </a>
+      <a href="https://github.com/krishj004/Foresight/blob/main/docs/release-notes/v0.3.1-en.md">
+        <b>Release notes →</b><span>v0.3.1 — npm one-command distribution</span>
+      </a>
+      <a href="https://www.npmjs.com/package/foresight-agent">
+        <b>npm package →</b><span>foresight-agent on the npm registry</span>
+      </a>
+      <a href="https://krishj004.github.io/open-agent-memory-benchmark/">
+        <b>Related: OAMB →</b><span>Open Agent Memory Benchmark — evidence-first agent-memory comparison</span>
+      </a>
+    </div>
+  </section>
+
+  <section>
+    <p class="note">Outputs are probabilistic estimates produced by statistical models and do not constitute investment, gambling, or any other decision advice. Prediction-market APIs are used only as internal priors.</p>
+  </section>
+
+  <footer>
+    <span>MIT licensed</span>
+    <a href="https://github.com/krishj004">GitHub</a>
+    <a href="https://www.linkedin.com/in/krish-jain004">LinkedIn</a>
+    <a href="mailto:krishj004@gmail.com">krishj004@gmail.com</a>
+  </footer>
+</main>
+</body>
+</html>
