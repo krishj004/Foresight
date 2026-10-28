@@ -1,0 +1,29 @@
+node_modules/
+.DS_Store
+__pycache__/
+
+# python
+.env
+.venv/
+/data/
+*.db
+dist/
+build/
+*.spec
+
+# Hermes desktop metadata
+.reasonix/
+
+# Never publish: commercial docs, decks, local ops state (public mirror = code only)
+*.log
+deck/
+deliverables/
+assets/
+docs/STATUS.md
+docs/预测Agent-*
+docs/agent-first-audit-*.md
+docs/cc-*.md
+docs/hermes-*.md
+# 本地产物（pytest TMP 指向仓库根 / pi 任务与暂存目录）
+pytest-of-*/
+.pi/

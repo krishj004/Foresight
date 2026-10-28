@@ -1,0 +1,398 @@
+"use strict";
+// Foresight 展示页前端：内部视图（看板/详情/系统）+ 写窗口 503 自动重试。
+// ---- 主题：白天/夜间切换（默认白天，localStorage 记忆） ----
+// ponytail: CSP 禁 inline head 脚本，主题在 app.js 首行生效；首屏顶栏可能闪一帧深色，内容渲染不受影响。
+function setTheme(t) {
+  document.documentElement.dataset.theme = t;
+  try { localStorage.setItem("fs-theme", t); } catch (e) { /* 隐私模式无存储 */ }
+  const m = document.querySelector('meta[name="theme-color"]');
+  if (m) m.content = t === "light" ? "#edf1f7" : "#0a0d14";
+}
+let initTheme = "light";
+try { initTheme = localStorage.getItem("fs-theme") || "light"; } catch (e) { /* 同上 */ }
+setTheme(initTheme);
+function mountThemeToggle() {
+  const box = $("#mode-switch");
+  if (!box || $("#theme-toggle")) return;
+  const b = document.createElement("button");
+  b.id = "theme-toggle";
+  b.setAttribute("aria-label", "切换白天/夜间主题");
+  const paint = () => { b.textContent = document.documentElement.dataset.theme === "light" ? "🌙 夜间" : "☀️ 白天"; };
+  b.addEventListener("click", () => {
+    setTheme(document.documentElement.dataset.theme === "light" ? "dark" : "light");
+    paint();
+  });
+  paint();
+  box.prepend(b);
+}
+function setTitle(t) { var el = document.querySelector("#page-title"); if (el) el.textContent = t; }
+const $ = (sel) => document.querySelector(sel);
+const mode = new URLSearchParams(location.search).get("mode");
+
+const state = { tab: "board", filters: { class: "", status: "", arm: "", q: "" }, retries: 0 };
+state.opsFilter = "";
+let opsTimer = null;
+let probeTimer = null;
+function stopOpsPolling() { if (opsTimer) { clearInterval(opsTimer); opsTimer = null; } }
+
+// ---- fetch 封装：503/网络错误 → 横幅 + 3 秒重试 ----
+async function fetchJSON(path, retry = true) {
+  try {
+    const r = await fetch(path);
+    if (!r.ok) throw Object.assign(new Error(`HTTP ${r.status}`), { status: r.status });
+    state.retries = 0;
+    hideBanner();
+    return await r.json();
+  } catch (e) {
+    if (e.status === 404) throw e; // 不重试（public 模式探测用）
+    showBanner("数据库写窗口进行中或服务不可用，自动重试…（每日 09:05/16:30 前后为写窗口）");
+    if (retry) {
+      await new Promise((res) => setTimeout(res, 3000));
+      return fetchJSON(path);
+    }
+    throw e;
+  }
+}
+function showBanner(msg) { const b = $("#error-banner"); b.textContent = msg; b.hidden = false; }
+function hideBanner() { $("#error-banner").hidden = true; }
+
+// ---- 渲染工具 ----
+function fmt(dt) { return dt ? String(dt).replace("T", " ").slice(0, 16) : "—"; }
+function pct(x) { return x == null ? "—" : (x * 100).toFixed(0) + "%"; }
+function badgeStatus(s) { return `<span class="badge ${s}">${{open:"未揭晓",pending:"待揭晓",resolved:"已揭晓"}[s]}</span>`; }
+
+function probCell(p) {
+  if (p == null) return "—";
+  const pv = Math.round(p * 100);
+  return `<span class="prob-cell" title="${pv}%"><span class="prob-bar"><span style="width:${pv}%"></span></span><span class="prob">${pct(p)}</span></span>`;
+}
+
+// ---- 看板 ----
+async function renderBoard() {
+  const f = state.filters;
+  const qs = new URLSearchParams();
+  if (f.class) qs.set("class", f.class);
+  if (f.status) qs.set("status", f.status);
+  if (f.arm) qs.set("arm", f.arm);
+  if (f.q) qs.set("q", f.q);
+  const { items } = await fetchJSON("/api/questions?" + qs.toString());
+  const resolved = items.filter((q) => q.status === "resolved");
+  const briers = resolved.map((q) => q.brier_score).filter((x) => x != null);
+  const avgBrier = briers.length ? (briers.reduce((a, b) => a + b, 0) / briers.length).toFixed(4) : "—";
+  const pending = items.length - resolved.length;
+  $("#app").innerHTML = `
+    <div class="stat-grid">
+      <div class="card stat"><span class="stat-label">题目总数</span><span class="stat-value">${items.length}</span></div>
+      <div class="card stat"><span class="stat-label">已揭晓</span><span class="stat-value ok">${resolved.length}</span></div>
+      <div class="card stat"><span class="stat-label">平均 Brier</span><span class="stat-value">${avgBrier}</span></div>
+      <div class="card stat"><span class="stat-label">未揭晓</span><span class="stat-value warn">${pending}</span></div>
+    </div>
+    <div class="card filters">
+      <select id="f-class" aria-label="按分类筛选">
+        <option value="">全部分类</option><option>${["A", "B", "C"].join("</option><option>")}</option></select>
+      <select id="f-status" aria-label="按状态筛选">
+        <option value="">全部状态</option>
+        <option value="open">未揭晓</option><option value="pending">待揭晓</option>
+        <option value="resolved">已揭晓</option></select>
+      <select id="f-arm" aria-label="按臂筛选">
+        <option value="">全部臂</option>
+        <option value="baseline">臂 A</option><option value="experiment">臂 B</option></select>
+      <input id="f-q" type="search" placeholder="关键词搜索…" value="${escAttr(f.q)}" aria-label="关键词搜索">
+      <span class="count">${items.length} 题</span>
+    </div>
+    <div class="card table-card"><table>
+      <thead><tr><th>ID</th><th>标题</th><th>概率</th><th>揭晓时间</th><th>状态</th><th>Brier</th><th>分类</th></tr></thead>
+      <tbody id="q-body">${items.map((q) => `
+        <tr class="clickable" data-id="${q.id}">
+          <td class="qid">#${q.id}</td><td class="title-cell" title="${escAttr(q.title)}">${esc(q.title)}</td>
+          <td>${probCell(q.probability)}</td>
+          <td class="nowrap mono">${fmt(q.closes_at)}</td>
+          <td>${badgeStatus(q.status)}</td>
+          <td class="mono">${q.brier_score == null ? "—" : q.brier_score.toFixed(4)}</td>
+          <td><span class="badge cls">${q.resolution_class ? esc(q.resolution_class) : "—"}</span></td>
+        </tr>`).join("") || `<tr><td colspan="7" class="empty">没有匹配的题目</td></tr>`}
+      </tbody></table></div>`;
+  $("#q-body").addEventListener("click", (e) => {
+    const tr = e.target.closest("tr[data-id]");
+    if (tr) openDetail(Number(tr.dataset.id));
+  });
+  $("#f-class").value = f.class; $("#f-status").value = f.status; $("#f-arm").value = f.arm;
+  $("#f-class").onchange = (e) => { state.filters.class = e.target.value; renderBoard(); };
+  $("#f-status").onchange = (e) => { state.filters.status = e.target.value; renderBoard(); };
+  $("#f-arm").onchange = (e) => { state.filters.arm = e.target.value; renderBoard(); };
+  $("#f-q").onchange = (e) => { state.filters.q = e.target.value; renderBoard(); };
+}
+
+function esc(s) { const d = document.createElement("div"); d.textContent = s ?? ""; return d.innerHTML; }
+function escAttr(s) { return esc(s).replace(/"/g, "&quot;"); }
+// href 协议白名单：仅 http/https 与相对路径；javascript:/data: 等一律回落 "#"。
+function safeHref(url) {
+  if (!url) return "#";
+  let p;
+  try { p = new URL(url, location.origin); } catch { return "#"; }
+  if (p.protocol !== "http:" && p.protocol !== "https:") return "#";
+  return escAttr(url);
+}
+
+// ---- 详情弹层 ----
+async function openDetail(id) {
+  const d = await fetchJSON(`/api/questions/${id}`);
+  $("#detail-body").innerHTML = `
+    <h2>#${d.id} ${esc(d.title)}</h2>
+    <div class="detail-hero"><div class="hero-label">预测概率</div>${probCell(d.probability)}</div>
+    <dl class="kv">
+      <dt>揭晓窗口</dt><dd class="mono">${fmt(d.opens_at)} → ${fmt(d.closes_at)}</dd>
+      <dt>状态</dt><dd>${badgeStatus(d.status)} ${d.resolution_class ? `<span class="badge cls">${esc(d.resolution_class)}</span>` : ""}</dd>
+      <dt>结果</dt><dd>${d.outcome == null ? "待揭晓" : (d.outcome ? "是 ✓" : "否 ✗")}</dd>
+      <dt>Brier</dt><dd class="mono">${d.brier_score == null ? "—" : d.brier_score.toFixed(4)}</dd>
+      <dt>臂</dt><dd class="mono">${d.arm ?? "—"}</dd>
+      <dt>判定规格</dt><dd class="spec">${d.resolution_spec ? esc(JSON.stringify(d.resolution_spec)) : "—"}</dd>
+    </dl>
+    ${modelDivergence(d)}
+    <div class="evidence"><h3>证据（${(d.documents || []).length}）</h3>
+      <ul>${(d.documents || []).map((doc) => `
+        <li><a href="${safeHref(doc.url)}" target="_blank" rel="noopener">${esc(doc.title || doc.url || "(无标题)")}</a>
+            <span class="src">${esc(doc.source)} · ${fmt(doc.published_at)}</span></li>`).join("") ||
+        `<li class="muted">无证据文档</li>`}
+      </ul></div>`;
+  $("#detail-overlay").hidden = false;
+}
+function modelDivergence(d) {
+  const runs = d.model_runs;
+  if (!runs || !Object.keys(runs).length) return "";
+  const all = Object.values(runs).flat().filter((x) => typeof x === "number");
+  if (!all.length) return "";
+  const mn = Math.min(...all), mx = Math.max(...all);
+  const mid = [...all].sort((a, b) => a - b)[Math.floor(all.length / 2)];
+  return `<dl class="kv"><dt>模型分歧</dt>
+    <dd>${pct(mn)} ~ ${pct(mx)}（中位 ${pct(mid)}，${all.length} 次采样）</dd></dl>`;
+}
+$("#detail-close").addEventListener("click", () => { $("#detail-overlay").hidden = true; });
+$("#detail-overlay").addEventListener("click", (e) => { if (e.target.id === "detail-overlay") $("#detail-overlay").hidden = true; });
+
+// ---- 系统面板 ----
+async function renderSystem() {
+  const s = await fetchJSON("/api/system");
+  const sb = await fetchJSON("/api/scoreboard");
+  $("#app").innerHTML = `
+    <div class="card"><h3>战绩分桶</h3>${bucketsHTML(sb.buckets)}</div>
+    <div class="card"><h3>双臂统计</h3>
+      <table><thead><tr><th>臂</th><th>预测数</th><th>已揭晓</th><th>Brier 均值</th></tr></thead>
+      <tbody>${s.arm_stats.map((a) => `<tr><td class="mono">${a.arm}</td><td class="mono">${a.n}</td>
+        <td class="mono">${a.resolved}</td><td class="mono">${a.brier_mean == null ? "—" : a.brier_mean.toFixed(4)}</td></tr>`).join("") ||
+        `<tr><td colspan="4" class="empty">无预测数据</td></tr>`}</tbody></table></div>
+    <div class="card"><h3>杠杆（levers）</h3>${leversHTML(s.levers)}</div>
+    <div class="card"><h3>经验库（lessons）</h3>${lessonsHTML(s.lessons)}</div>
+    <div class="card"><h3>进化日志</h3>${logHTML(s.evolution_log)}</div>
+    <div class="card"><h3>模型统计</h3>${modelStatsHTML(s.model_stats)}</div>`;
+}
+
+// ---- 系统日志（ops）----
+const CHECK_LABEL = { ok: "正常", warn: "警告", error: "异常", info: "提示", pending: "待运行" };
+const CHIP_TYPES = {
+  round: "round_started,round_completed",
+  question_added: "question_added",
+  prediction_added: "prediction_added",
+  resolution: "resolution_ok,resolution_failed,resolution_timeout,resolution_archived,resolution_brier_failed",
+  prediction_skipped: "prediction_skipped",
+};
+async function renderOps() {
+  stopOpsPolling();
+  const typeParam = state.opsFilter ? "&types=" + encodeURIComponent(CHIP_TYPES[state.opsFilter]) : "";
+  const h = await fetchJSON("/api/ops/health");
+  const { items } = await fetchJSON("/api/ops/log?limit=200" + typeParam);
+  const u = await fetchJSON("/api/ops/usage");
+  $("#app").innerHTML = `
+    <div class="card health-banner ${h.status}">
+      <span class="health-dot" aria-hidden="true"></span>
+      <div class="health-text">
+        <strong>系统状态：${CHECK_LABEL[h.status] ?? h.status}</strong>
+        <span class="health-time">检测于 ${fmt(h.checked_at)}</span>
+      </div>
+      <button id="refresh-probes">立即检测</button>
+    </div>
+    <div class="card"><h3>健康检查</h3>
+      ${h.checks.map((c) => `
+        <div class="check-row ${c.status}">
+          <span class="check-dot"></span>
+          <span class="check-summary">${esc(c.summary)}</span>
+          ${c.detail && Object.keys(c.detail).length ?
+            `<details><summary>明细</summary><pre>${esc(JSON.stringify(c.detail, null, 2))}</pre></details>` : ""}
+        </div>`).join("")}
+    </div>
+    <div class="card"><h3>Token 用量（近 30 天）</h3>${usageHTML(u.days)}</div>
+    <div class="card"><h3>事件时间线（最近 200 条）</h3>
+      <div class="chips">${chipsHTML()}</div>
+      <ul class="timeline">${items.map(evHTML).join("") || "<li class='empty narrow'>暂无事件</li>"}</ul>
+    </div>
+    <div class="card"><h3>原始日志文件（尾部 100 行）</h3>
+      ${["daily", "evolve"].map((n) => `<details class="logwrap"><summary>data/${n}.log</summary><pre class="logfile" data-file="${n}">加载中…</pre></details>`).join("")}
+    </div>`;
+  for (const chip of document.querySelectorAll(".chip")) {
+    chip.classList.toggle("on", chip.dataset.type === state.opsFilter);
+    chip.onclick = () => {
+      state.opsFilter = state.opsFilter === chip.dataset.type ? "" : chip.dataset.type;
+      renderOps();
+    };
+  }
+  $("#refresh-probes").onclick = async (e) => {
+    e.target.textContent = "检测中…";
+    await fetch("/api/ops/health/refresh", { method: "POST" }).catch(() => {});
+    e.target.textContent = "立即检测";   // 写窗口 503 自愈：POST 失败也复位文案，不卡「检测中…」
+    let tries = 0;
+    clearInterval(probeTimer);
+    probeTimer = setInterval(async () => {
+      let now;
+      try {
+        now = await fetchJSON(`/api/ops/health`);
+      } catch {
+        clearInterval(probeTimer);   // health 瞬间失败也要复位按钮，不卡「检测中…」
+        renderOps();
+        return;
+      }
+      if (state.tab !== "ops") { clearInterval(probeTimer); return; }   // 切走即弃，不覆盖其他 tab
+      if (!now.checks.some((c) => c.key === "probe_refreshing") || ++tries > 10) {
+        clearInterval(probeTimer);
+        renderOps().then(() => {
+          const b = document.querySelector("#refresh-probes");   // 明确回执：结果不变时也能看见刷新发生过
+          if (b) { b.textContent = "已刷新 ✓"; setTimeout(() => { if (b.isConnected) b.textContent = "立即检测"; }, 3000); }
+        });
+      }
+    }, 3000);
+  };
+  for (const det of document.querySelectorAll("details:has(.logfile)")) {
+    det.addEventListener("toggle", () => {
+      if (!det.open) return;
+      const pre = det.querySelector(".logfile");
+      if (pre.textContent === "加载中…") {
+        fetchJSON(`/api/ops/log-files?name=${pre.dataset.file}`)
+          .then((r) => { pre.textContent = r.lines.join("\n"); })
+          .catch(() => { pre.textContent = "（加载失败）"; });
+      }
+    });
+  }
+  opsTimer = setInterval(renderOps, 30000);
+}
+function chipsHTML() {
+  return Object.keys(CHIP_TYPES)
+    .map((t) => `<button class="chip" data-type="${t}">${t}</button>`).join("");
+}
+function evHTML(ev) {
+  const bad = ["resolution_failed", "prediction_skipped", "resolution_brier_failed"].includes(ev.event_type);
+  const cls = `${bad ? "bad " : ""}${ev.event_type.startsWith("round") ? "round " : ""}t-${ev.event_type}`;
+  return `<li class="ev ${cls}"><span class="ts">${fmt(ev.ts)}</span>
+    <span class="type">${esc(ev.event_type)}</span>
+    <span class="detail">${esc(ev.detail ?? "")}</span></li>`;
+}
+function bucketsHTML(buckets) {
+  if (!buckets || !buckets.length) return emptyHTML("战绩积累中", "首题自动揭晓 2026-08-14，之后每日 16:30 更新分桶");
+  const max = Math.max(...buckets.map((b) => b.n));
+  return `<div class="axis-grid">${buckets.map((b) => `
+    <div class="bucket${b.n === max ? " hot" : ""}">
+      <div class="val">${b.n}</div>
+      <div class="bar" style="height:${Math.max(6, Math.round(120 * b.n / max))}px" title="n=${b.n} · Brier ${b.brier_mean.toFixed(3)}"></div>
+      <div class="lbl">${b.bucket}</div>
+      <div class="brier">${b.brier_mean.toFixed(3)}${b.unreliable ? " *" : ""}</div>
+    </div>`).join("")}</div>
+    <p class="footnote">桶内 Brier 均值（* 样本不足）</p>`;
+}
+function leversHTML(levers) {
+  if (!levers.length) return emptyHTML("闭环运行中", "levers 将随每日 predict/resolve 与周报归因积累");
+  return `<table><thead><tr><th>杠杆</th><th>类型</th><th>状态</th><th>效应量</th><th>验证样本</th></tr></thead>
+    <tbody>${levers.map((l) => `<tr><td class="mono">${esc(l.lever_key)}</td><td>${esc(l.lever_type)}</td>
+      <td>${esc(l.status)}</td><td class="mono">${l.effect_size ?? "—"}</td><td class="mono">${l.n_validated}</td></tr>`).join("")}</tbody></table>`;
+}
+function lessonsHTML(lessons) {
+  if (!lessons.length) return emptyHTML("闭环运行中", "lessons 将随揭晓归因积累（首个周报 2026-08-17）");
+  return `<table><thead><tr><th>类型</th><th>假设</th><th>结果</th><th>归因</th><th>置信</th><th>状态</th></tr></thead>
+    <tbody>${lessons.map((l) => `<tr><td>${esc(l.question_type)}</td><td>${esc(l.testable_criteria)}</td>
+      <td>${l.outcome ? "✓" : "✗"}</td><td>${esc(l.attribution ?? "—")}</td>
+      <td class="mono">${l.confidence ?? "—"}</td><td>${esc(l.status)}</td></tr>`).join("")}</tbody></table>`;
+}
+function logHTML(logs) {
+  if (!logs.length) return emptyHTML("闭环运行中", "evolution_log 将随每日轮次写入");
+  return `<table><thead><tr><th>时间</th><th>事件</th><th>详情</th></tr></thead>
+    <tbody>${logs.map((l) => `<tr><td class="nowrap mono">${fmt(l.ts)}</td><td class="mono">${esc(l.event_type)}</td>
+      <td class="small">${esc(l.detail)}</td></tr>`).join("")}</tbody></table>`;
+}
+function modelStatsHTML(stats) {
+  if (!stats.length) return emptyHTML("闭环运行中", "模型统计将随预测轮积累");
+  return `<table><thead><tr><th>模型</th><th>预测数</th><th>Brier EMA</th><th>更新时间</th></tr></thead>
+    <tbody>${stats.map((m) => `<tr><td class="mono">${esc(m.model_name)}</td><td class="mono">${m.predictions}</td>
+      <td class="mono">${m.brier_ema == null ? "—" : m.brier_ema.toFixed(4)}</td><td class="nowrap mono">${fmt(m.last_updated)}</td></tr>`).join("")}</tbody></table>`;
+}
+function emptyHTML(title, sub) { return `<div class="empty"><strong>${title}</strong>${sub}</div>`; }
+function usageHTML(days) {
+  if (!days.length) return emptyHTML("暂无用量数据", "首行将于本轮结束（daily.py）写入 daily.log");
+  const t = days.reduce((a, d) => ({ prompt: a.prompt + d.prompt, completion: a.completion + d.completion, calls: a.calls + d.calls }),
+    { prompt: 0, completion: 0, calls: 0 });
+  return `<table><thead><tr><th>日期</th><th>Prompt</th><th>Completion</th><th>调用</th></tr></thead>
+    <tbody>${days.map((d) => `<tr><td class="nowrap mono">${esc(d.day)}</td><td class="mono">${d.prompt}</td>
+      <td class="mono">${d.completion}</td><td class="mono">${d.calls}</td></tr>`).join("")}
+      <tr><td class="mono"><strong>合计</strong></td><td class="mono"><strong>${t.prompt}</strong></td>
+      <td class="mono"><strong>${t.completion}</strong></td><td class="mono"><strong>${t.calls}</strong></td></tr></tbody></table>`;
+}
+
+// ---- 对外视图（战绩榜）：仅从 /api/public/* 取数 ----
+async function renderPublic() {
+  const s = await fetchJSON("/api/public/summary");
+  const { items } = await fetchJSON("/api/public/resolved");
+  document.querySelectorAll(".tab").forEach((t) => (t.style.display = "none"));
+  $("#mode-switch").innerHTML = `<a href="?"><button>← 内部视图</button></a>`;
+  mountThemeToggle();
+  setTitle("战绩榜");
+  $("#app").innerHTML = `
+    <div class="stat-grid">
+      <div class="card stat"><span class="stat-label">已揭晓</span><span class="stat-value">${s.resolved}</span></div>
+      <div class="card stat"><span class="stat-label">整体 Brier</span><span class="stat-value">${s.brier_mean == null ? "—" : s.brier_mean.toFixed(4)}</span></div>
+      <div class="card stat"><span class="stat-label">战绩窗口</span><span class="stat-value small">${s.first_resolved_at ? fmt(s.first_resolved_at) + " → " + fmt(s.last_resolved_at) : "—"}</span></div>
+    </div>
+    <div class="card"><h3>分桶 Brier</h3>${bucketsHTML(s.buckets)}</div>
+    <div class="card"><h3>已揭晓预测</h3>
+      <table><thead><tr><th>标题</th><th>揭晓时间</th><th>预测概率</th><th>结果</th><th>Brier</th></tr></thead>
+      <tbody>${items.map((q) => `
+        <tr><td class="title-cell" title="${escAttr(q.title)}">${esc(q.title)}</td><td class="nowrap mono">${fmt(q.closes_at)}</td>
+          <td>${probCell(q.probability)}</td>
+          <td>${q.outcome ? "是 ✓" : "否 ✗"}</td>
+          <td class="mono">${q.brier_score == null ? "—" : q.brier_score.toFixed(4)}</td></tr>`).join("") ||
+        `<tr><td colspan="5" class="empty"><strong>战绩积累中</strong>首题自动揭晓 2026-08-14，之后每日 16:30 更新</td></tr>`}
+      </tbody></table></div>`;
+}
+
+// ---- 顶栏 & 启动 ----
+async function init() {
+  // public 模式探测：内部端点 404（路由未注册）→ 锁定对外视图（仅 --mode public 时发生）。
+  // 注意判断必须用 status === 404 而非 !ok——503（DB 写窗口/不可用）不算 public 信号，
+  // 保持内部视图并走既有 fetchJSON 横幅重试路径，避免误锁对外视图（final review I-4）。
+  let view = "internal";
+  if (mode === "public") { view = "public"; }
+  else {
+    try {
+      const probe = await fetch("/api/questions", { method: "HEAD" });
+      if (probe.status === 404) view = "public";
+    } catch { /* 网络错误由重试横幅兜底 */ }
+  }
+  if (view === "public") renderPublic();
+  else {
+    $("#mode-switch").innerHTML = `<a href="?mode=public"><button>对外视图 →</button></a>`;
+    mountThemeToggle();
+    setTitle("看板");
+    document.querySelectorAll(".tab").forEach((t) =>
+      t.addEventListener("click", async () => {
+        document.querySelectorAll(".tab").forEach((x) => {
+          x.classList.remove("active");
+          x.setAttribute("aria-selected", "false");
+        });
+        t.classList.add("active");
+        t.setAttribute("aria-selected", "true");
+        state.tab = t.dataset.tab;
+        setTitle({ board: "看板", system: "系统", ops: "系统日志" }[state.tab] || "看板");
+        stopOpsPolling();   // 切走必须停轮询：否则 30s 后 renderOps 会覆盖其他 tab 的 DOM
+        if (state.tab === "board") await renderBoard();
+        else if (state.tab === "system") await renderSystem();
+        else await renderOps();
+      }));
+    await renderBoard();
+  }
+}
+init();
